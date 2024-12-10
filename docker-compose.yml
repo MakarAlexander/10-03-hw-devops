@@ -1,0 +1,101 @@
+services:
+  sysctl:
+      image: busybox
+      container_name: sysctl
+      command: sh -c "sysctl -w vm.max_map_count=262144 && sleep 1h"
+      privileged: true
+
+  elasticsearch-hot:
+    image: bitnami/elasticsearch:8.14.3
+    container_name: elasticsearch-hot
+    environment:
+      - ELASTICSEARCH_CLUSTER_NAME=elasticluster
+      - ELASTICSEARCH_CLUSTER_HOSTS=elasticsearch-hot,elasticsearch-warm
+      - ELASTICSEARCH_NODE_NAME=elasticsearch-hot
+      - ELASTICSEARCH_HEAP_SIZE=1g
+      - ELASTICSEARCH_CLUSTER_MASTER_HOSTS=elasticsearch-hot,elasticsearch-warm
+      - ELASTICSEARCH_NODE_ROLES=master,data_hot,remote_cluster_client,data_content
+      - ELASTICSEARCH_IS_DEDICATED_NODE=true
+    volumes:
+      - 'elasticsearch_hot_data:/bitnami'
+    ports:
+      - 9200:9200
+    networks:
+      - default_network
+    depends_on:
+      - sysctl
+
+  elasticsearch-warm:
+    image: bitnami/elasticsearch:8.14.3
+    container_name: elasticsearch-warm
+    environment:
+      - ELASTICSEARCH_CLUSTER_NAME=elasticluster
+      - ELASTICSEARCH_CLUSTER_HOSTS=elasticsearch-hot,elasticsearch-warm
+      - ELASTICSEARCH_NODE_NAME=elasticsearch-warm
+      - ELASTICSEARCH_HEAP_SIZE=1g
+      - ELASTICSEARCH_CLUSTER_MASTER_HOSTS=elasticsearch-hot,elasticsearch-warm
+      - ELASTICSEARCH_NODE_ROLES=master,data_warm,remote_cluster_client,data_content
+      - ELASTICSEARCH_IS_DEDICATED_NODE=true
+    volumes:
+      - 'elasticsearch_warm_data:/bitnami'
+    networks:
+      - default_network
+    depends_on:
+      - sysctl
+      - elasticsearch-hot
+
+
+  kibana:
+    container_name: kibana
+    image: kibana:8.14.3
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch-hot:9200
+      - ELASTICSEARCH_HOSTS=["http://elasticsearch-hot:9200","http://elasticsearch-warm:9200"]
+    ports:
+      - 5601:5601
+    networks:
+      - default_network
+    depends_on:
+      - elasticsearch-hot
+      - elasticsearch-warm
+
+  filebeat:
+    container_name: filebeat
+    image: elastic/filebeat:8.10.4
+    user: root
+    volumes:
+      - ../filebeat.yml:/usr/share/filebeat/filebeat.yml:rw
+      - /var/lib/docker:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default_network
+
+  logstash:
+    container_name: logstash
+    image: logstash:8.10.2
+    environment:
+      - ELASTIC_HOSTS=http://elasticsearch-hot:9200
+    volumes:
+      - ../logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+      - ../logstash.yml:/opt/logstash/config/logstash.yml:ro
+    networks:
+      - default_network
+    depends_on:
+      - elasticsearch-hot
+
+  some_application:
+    image: library/python:3.9-alpine
+    container_name: some_app
+    volumes:
+      - ../run.py:/opt/run.py
+    entrypoint: python3 /opt/run.py
+
+volumes:
+  elasticsearch_hot_data:
+    driver: local
+  elasticsearch_warm_data:
+    driver: local
+
+networks:
+  default_network:
+    driver: bridge
